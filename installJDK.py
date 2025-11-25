@@ -2,7 +2,6 @@ import os
 import subprocess
 import tempfile
 import time
-
 import pyautogui
 
 
@@ -66,7 +65,16 @@ def open_chrome_with_medium_article():
 
             if scroll_to_step1_with_image():
                 time.sleep(3)
-                click_jdk_download_link_with_image()
+                if click_jdk_download_link_with_image():
+                    # Give the Oracle page a moment to load before looking for the Windows tab
+                    time.sleep(5)
+                    if click_windows_tab_with_image():
+                        time.sleep(2)
+                        if click_jdk11_windows_exe_with_image():
+                            time.sleep(2)
+                            if click_oracle_agreement_checkbox():
+                                time.sleep(1)
+                                click_oracle_download_link()
         else:
             print("WARN: Chrome opened but window not found.")
 
@@ -145,22 +153,136 @@ def click_jdk_download_link_with_image():
         return False
 
 
-def verify_image_file():
-    """Verify that the jdk_link.png file exists."""
-    if os.path.exists("jdk_link.png"):
-        print("OK: Found jdk_link.png file")
-        file_size = os.path.getsize("jdk_link.png")
-        print(f"File size: {file_size} bytes")
-        return True
-    else:
-        print("WARN: jdk_link.png file not found in current directory")
-        print("Current directory:", os.getcwd())
+def click_windows_tab_with_image():
+    """On the Oracle downloads page, click the Windows tab using image recognition."""
+
+    print("Looking for Windows tab on Oracle JDK download page...")
+
+    try:
+        pyautogui.click(200, 200)  # focus the browser
+        time.sleep(1)
+
+        tab_location = pyautogui.locateOnScreen("jdk_windows_link.png", confidence=0.7)
+
+        if tab_location:
+            tab_center = pyautogui.center(tab_location)
+            pyautogui.moveTo(tab_center, duration=1)
+            time.sleep(0.5)
+            pyautogui.click()
+            print("OK: Windows tab clicked.")
+            return True
+        else:
+            print("WARN: Windows tab image not found on screen.")
+            return False
+
+    except Exception as e:
+        print(f"ERROR during clicking Windows tab: {e}")
         return False
 
 
+def click_jdk11_windows_exe_with_image():
+    """On the Windows tab, click the JDK 11.0.29 Windows x64 .exe download link using image recognition."""
+
+    print("Looking for JDK 11 Windows x64 .exe download link...")
+
+    try:
+        pyautogui.click(200, 200)  # focus the browser
+        time.sleep(1)
+
+        link_location = pyautogui.locateOnScreen("jdk11_windows_exe_download_link.png", confidence=0.7)
+
+        if link_location:
+            link_center = pyautogui.center(link_location)
+            pyautogui.moveTo(link_center, duration=1)
+            time.sleep(0.5)
+            pyautogui.click()
+            print("OK: JDK 11 Windows x64 .exe link clicked.")
+            return True
+        else:
+            print("WARN: JDK 11 Windows x64 .exe link image not found on screen.")
+            return False
+
+    except Exception as e:
+        print(f"ERROR during clicking JDK 11 Windows .exe link: {e}")
+        return False
+
+
+def click_oracle_agreement_checkbox():
+    """Click the Oracle license agreement checkbox in the download dialog."""
+
+    print("Looking for Oracle license agreement checkbox...")
+
+    try:
+        checkbox_location = pyautogui.locateOnScreen("oracle_agreement_checkbox.png", confidence=0.7)
+
+        if checkbox_location:
+            checkbox_center = pyautogui.center(checkbox_location)
+            pyautogui.moveTo(checkbox_center, duration=0.7)
+            time.sleep(0.3)
+            pyautogui.click()
+            print("OK: Oracle license checkbox clicked.")
+            return True
+        else:
+            print("WARN: Oracle license checkbox image not found on screen.")
+            return False
+
+    except Exception as e:
+        print(f"ERROR during clicking Oracle license checkbox: {e}")
+        return False
+
+
+def click_oracle_download_link():
+    """Click the download link inside the Oracle license dialog."""
+
+    print("Looking for Oracle download link button...")
+
+    try:
+        download_location = pyautogui.locateOnScreen("download_jdk11_for_windows_link.png", confidence=0.7)
+
+        if download_location:
+            download_center = pyautogui.center(download_location)
+            pyautogui.moveTo(download_center, duration=0.7)
+            time.sleep(0.3)
+            pyautogui.click()
+            print("OK: Oracle download link clicked.")
+            return True
+        else:
+            print("WARN: Oracle download link image not found on screen.")
+            return False
+
+    except Exception as e:
+        print(f"ERROR during clicking Oracle download link: {e}")
+        return False
+
+
+def verify_image_files():
+    """Verify that required image files exist."""
+    required_images = [
+        "jdk_link.png",
+        "jdk_windows_link.png",
+        "jdk11_windows_exe_download_link.png",
+        "oracle_agreement_checkbox.png",
+        "download_jdk11_for_windows_link.png",
+    ]
+    missing = []
+
+    for image_name in required_images:
+        if os.path.exists(image_name):
+            file_size = os.path.getsize(image_name)
+            print(f"OK: Found {image_name} ({file_size} bytes)")
+        else:
+            missing.append(image_name)
+            print(f"WARN: {image_name} not found in current directory")
+
+    if missing:
+        print("Current directory:", os.getcwd())
+        return False
+    return True
+
+
 if __name__ == "__main__":
-    if verify_image_file():
+    if verify_image_files():
         print("Starting automated Medium article navigation...")
         open_chrome_with_medium_article()
     else:
-        print("Please ensure jdk_link.png is in the same folder as this script")
+        print("Please ensure all required images are in the same folder as this script")
