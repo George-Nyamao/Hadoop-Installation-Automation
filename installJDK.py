@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import traceback
 import pyautogui
 
 
@@ -139,13 +140,26 @@ def open_chrome_with_medium_article():
                                     if oracle_sign_in_username_step():
                                         time.sleep(3)
                                         if oracle_sign_in_password_step():
-                                            time.sleep(3)
-                                            wait_for_download_and_open_installer()
+                                            print("\n" + "="*60)
+                                            print("ACTION REQUIRED: 2-Factor Authentication (2FA)")
+                                            print("Please check your phone to approve the Oracle sign-in request.")
+                                            print("The script will now wait for the download to start...")
+                                            print("="*60 + "\n")
+
+                                            # Increased timeout to 5 minutes to accommodate 2FA
+                                            if wait_for_download_and_open_installer(timeout_seconds=300):
+                                                print("Installer opened successfully. Proceeding to installation...")
+                                                install_jdk()
         else:
             print("WARN: Chrome opened but window not found.")
 
+
+
+    except pyautogui.FailSafeException:
+        print("\nERROR: Fail-safe triggered from mouse movement to corner. Script aborted.")
     except Exception as e:
-        print(f"ERROR: {e}")
+        print(f"ERROR: {repr(e)}")
+        traceback.print_exc()
 
 
 def scroll_to_step1_with_image():
@@ -332,24 +346,38 @@ def oracle_sign_in_username_step():
         return False
 
     try:
-        # Focus should already be in the username field; type then click Next
+        # Wait for the Next button to appear to ensure page is loaded
+        print("Waiting for 'Next' button to appear...")
+        next_location = None
+        start_wait = time.time()
+        while time.time() - start_wait < 60:
+            try:
+                next_location = pyautogui.locateOnScreen("oracle_signin_next_link.png", confidence=0.7)
+                if next_location:
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+
+        if not next_location:
+            print("WARN: Oracle sign-in page (Next button) not found after waiting.")
+            return False
+
+        # Page is loaded. Oracle usually focuses the username field.
+        print("Page loaded. Typing username...")
         pyautogui.write(username, interval=0.05)
         time.sleep(0.5)
 
-        next_location = pyautogui.locateOnScreen("oracle_signin_next_link.png", confidence=0.7)
-        if next_location:
-            next_center = pyautogui.center(next_location)
-            pyautogui.moveTo(next_center, duration=0.5)
-            time.sleep(0.2)
-            pyautogui.click()
-            print("OK: Entered username and clicked Next.")
-            return True
-        else:
-            print("WARN: Could not find Oracle sign-in Next button on screen.")
-            return False
+        # Click Next
+        next_center = pyautogui.center(next_location)
+        pyautogui.moveTo(next_center, duration=0.5)
+        time.sleep(0.2)
+        pyautogui.click()
+        print("OK: Entered username and clicked Next.")
+        return True
 
     except Exception as e:
-        print(f"ERROR during Oracle sign-in username step: {e}")
+        print(f"ERROR during Oracle sign-in username step: {repr(e)}")
         return False
 
 
@@ -364,24 +392,93 @@ def oracle_sign_in_password_step():
         return False
 
     try:
-        # Focus should already be in the password field; type then click Sign In
+        # Wait for the Sign In button to appear
+        print("Waiting for 'Sign In' button to appear...")
+        signin_location = None
+        start_wait = time.time()
+        while time.time() - start_wait < 60:
+            try:
+                signin_location = pyautogui.locateOnScreen("oracle_signin_signin_link.png", confidence=0.7)
+                if signin_location:
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+
+        if not signin_location:
+            print("WARN: Oracle Sign In button not found after waiting.")
+            return False
+
+        # Focus should be in password field now
+        print("Page loaded. Typing password...")
         pyautogui.write(password, interval=0.05)
         time.sleep(0.5)
 
-        signin_location = pyautogui.locateOnScreen("oracle_signin_signin_link.png", confidence=0.7)
-        if signin_location:
-            signin_center = pyautogui.center(signin_location)
-            pyautogui.moveTo(signin_center, duration=0.5)
-            time.sleep(0.2)
-            pyautogui.click()
-            print("OK: Entered password and clicked Sign In.")
-            return True
-        else:
-            print("WARN: Could not find Oracle Sign In button on screen.")
-            return False
+        # Click Sign In
+        signin_center = pyautogui.center(signin_location)
+        pyautogui.moveTo(signin_center, duration=0.5)
+        time.sleep(0.2)
+        pyautogui.click()
+        print("OK: Entered password and clicked Sign In.")
+        return True
 
     except Exception as e:
-        print(f"ERROR during Oracle sign-in password step: {e}")
+        print(f"ERROR during Oracle sign-in password step: {repr(e)}")
+        return False
+
+
+def focus_installer_window(timeout_seconds=60):
+    """Locate and focus the JDK installer window by title."""
+    print("Looking for JDK installer window...")
+    start = time.time()
+    target_window = None
+    # Titles to look for (more specific to avoid matching editors)
+    title_snippets = [
+        "Java(TM) SE Development Kit",
+        "Java SE Development Kit",
+        "JDK 11",
+        "Development Kit",
+        "Setup",
+    ]
+    exclude_snippets = ["Visual Studio Code", "installJDK", "Hadoop-Installation-Automation"]
+    while time.time() - start < timeout_seconds:
+        try:
+            candidates = []
+            for snippet in title_snippets:
+                wins = pyautogui.getWindowsWithTitle(snippet)
+                candidates.extend(wins)
+            # pick the first candidate that doesn't match excludes
+            for win in candidates:
+                title = getattr(win, "title", "") or ""
+                if any(excl in title for excl in exclude_snippets):
+                    continue
+                target_window = win
+                break
+            if target_window:
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+
+    if not target_window:
+        print("WARN: Could not find installer window by title.")
+        return False
+
+    try:
+        try:
+            target_window.maximize()
+        except Exception:
+            pass
+        try:
+            target_window.activate()
+        except Exception:
+            pass
+        print(f"OK: Activated installer window: '{target_window.title}'")
+        time.sleep(2)  # allow the window to paint
+        return True
+    except Exception as e:
+        print(f"ERROR: Unable to activate installer window: {e}")
+        traceback.print_exc()
         return False
 
 
@@ -393,23 +490,38 @@ def wait_for_download_and_open_installer(timeout_seconds=180):
     downloads_icon = None
 
     while time.time() - start < timeout_seconds:
-        downloads_icon = pyautogui.locateOnScreen("downloads_icon_link.png", confidence=0.7)
-        if downloads_icon:
-            break
-        time.sleep(2)
+        try:
+            downloads_icon = pyautogui.locateOnScreen("downloads_icon_link.png", confidence=0.7)
+            if downloads_icon:
+                break
+        except Exception:
+            # Ignore transient errors during search
+            pass
+            
+        time.sleep(1)
 
     if not downloads_icon:
         print("WARN: Downloads icon not found within timeout.")
         return False
 
     try:
-        downloads_center = pyautogui.center(downloads_icon)
-        pyautogui.moveTo(downloads_center, duration=0.5)
-        time.sleep(0.2)
-        pyautogui.click()
-        time.sleep(1.5)  # allow the downloads flyout to open
-
+        # Check if the download bubble is ALREADY open (common if download just finished)
         exe_link = pyautogui.locateOnScreen("oracle_downloaded_jdk11_exe_link.png", confidence=0.7)
+
+        if exe_link:
+            print("OK: Download bubble appears to be open already.")
+        else:
+            # If not visible, click the downloads icon to toggle it open
+            print("Download bubble not visible, clicking icon to open...")
+            downloads_center = pyautogui.center(downloads_icon)
+            pyautogui.moveTo(downloads_center, duration=0.5)
+            time.sleep(0.2)
+            pyautogui.click()
+            time.sleep(1.5)  # allow the downloads flyout to open
+            
+            # Look for the link again
+            exe_link = pyautogui.locateOnScreen("oracle_downloaded_jdk11_exe_link.png", confidence=0.7)
+
         if exe_link:
             exe_center = pyautogui.center(exe_link)
             pyautogui.moveTo(exe_center, duration=0.5)
@@ -423,6 +535,123 @@ def wait_for_download_and_open_installer(timeout_seconds=180):
 
     except Exception as e:
         print(f"ERROR while opening downloaded JDK installer: {e}")
+        traceback.print_exc()
+        return False
+
+def install_jdk():
+    """Handle the JDK installation wizard steps."""
+    print("Waiting for JDK installer to launch...")
+    
+    # Step 1: Bring installer window to the foreground
+    if not focus_installer_window(timeout_seconds=60):
+        print("WARN: Installer window not found; cannot continue.")
+        return False
+
+    # Step 2: Check for "Already Installed" dialog OR Welcome Screen
+    try:
+        # Wait a bit for the installer to actually appear
+        time.sleep(5)
+        
+        print("Looking for installer Welcome screen OR 'Already Installed' dialog...")
+        next_btn = None
+        already_installed_yes = None
+        
+        # Try for up to 60 seconds for the installer to show up
+        for _ in range(30):
+            next_btn = pyautogui.locateOnScreen("JDK_setup_next_icon.png", confidence=0.7)
+            if next_btn:
+                break
+            time.sleep(2)
+            
+        if next_btn:
+            pyautogui.click(pyautogui.center(next_btn))
+            print("OK: Clicked Next on Welcome screen.")
+            time.sleep(2)
+        else:
+            print("WARN: Installer Welcome screen (Next button) not found.")
+            return False
+
+        # Step 3: Change Install Path
+        print("Looking for Change... button...")
+        change_btn = pyautogui.locateOnScreen("jdk_setup_change_button.png", confidence=0.7)
+        if change_btn:
+            pyautogui.click(pyautogui.center(change_btn))
+            print("OK: Clicked Change button.")
+            time.sleep(2)
+            
+            # Wait for the folder change screen/textbox
+            print("Looking for folder path textbox...")
+            textbox = None
+            for _ in range(10):
+                textbox = pyautogui.locateOnScreen("jdk_setup_change_folder_name_textbox.png", confidence=0.7)
+                if textbox:
+                    break
+                time.sleep(1)
+                
+            if textbox:
+                pyautogui.click(pyautogui.center(textbox))
+                print("OK: Focused folder path textbox.")
+                
+                # Select all and delete
+                pyautogui.hotkey("ctrl", "a")
+                time.sleep(0.5)
+                pyautogui.press("backspace")
+                time.sleep(0.5)
+                
+                # Type new path
+                new_path = r"C:\Java\jdk-11\\"
+                pyautogui.write(new_path, interval=0.05)
+                print(f"OK: Typed new path: {new_path}")
+                time.sleep(1)
+                
+                # Click OK
+                ok_btn = pyautogui.locateOnScreen("Ok_button.png", confidence=0.7)
+                if ok_btn:
+                    pyautogui.click(pyautogui.center(ok_btn))
+                    print("OK: Clicked OK button to confirm path.")
+                    time.sleep(2)
+                else:
+                    print("WARN: OK button not found.")
+                    return False
+            else:
+                print("WARN: Folder path textbox not found.")
+                return False
+        else:
+            print("WARN: Change button not found.")
+            return False
+
+        # Step 4: Next (to start install)
+        print("Looking for Next button to start installation...")
+        # Reuse the next button image
+        next_btn_2 = pyautogui.locateOnScreen("JDK_setup_next_icon.png", confidence=0.7)
+        if next_btn_2:
+            pyautogui.click(pyautogui.center(next_btn_2))
+            print("OK: Clicked Next to start installation.")
+        else:
+            print("WARN: Second Next button not found.")
+            return False
+            
+        # Step 5: Wait for Close button
+        print("Waiting for installation to complete (looking for Close button)...")
+        close_btn = None
+        # Wait up to 5 minutes for install to finish
+        start_wait = time.time()
+        while time.time() - start_wait < 300:
+            close_btn = pyautogui.locateOnScreen("Close_button.png", confidence=0.7)
+            if close_btn:
+                break
+            time.sleep(2)
+            
+        if close_btn:
+            pyautogui.click(pyautogui.center(close_btn))
+            print("OK: Installation complete! Clicked Close.")
+            return True
+        else:
+            print("WARN: Close button not found (installation timed out?).")
+            return False
+
+    except Exception as e:
+        print(f"ERROR during JDK installation: {repr(e)}")
         return False
 
 
@@ -438,6 +667,13 @@ def verify_image_files():
         "oracle_signin_signin_link.png",
         "downloads_icon_link.png",
         "oracle_downloaded_jdk11_exe_link.png",
+        # New installation images
+        "JDK_setup_next_icon.png",
+        "jdk_setup_change_button.png",
+        "JDK_setup_change_folder_screen.png", # Optional, but user mentioned it
+        "jdk_setup_change_folder_name_textbox.png",
+        "Ok_button.png",
+        "Close_button.png"
     ]
     missing = []
 
@@ -460,5 +696,14 @@ if __name__ == "__main__":
     if verify_image_files():
         print("Starting automated Medium article navigation...")
         open_chrome_with_medium_article()
+        
+        # After the browser part is done (which ends with opening the installer),
+        # we now run the installation automation.
+        # Note: open_chrome_with_medium_article() currently calls the whole chain.
+        # We should probably refactor or just append the call here if the previous function returns success.
+        # However, open_chrome_with_medium_article() doesn't return a value indicating full success easily,
+        # but it prints messages.
+        # The last step in open_chrome_with_medium_article is wait_for_download_and_open_installer.
+        # We can modify open_chrome_with_medium_article to call install_jdk at the end.
     else:
         print("Please ensure all required images are in the same folder as this script")
