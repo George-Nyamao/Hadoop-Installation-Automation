@@ -5,6 +5,12 @@ import tempfile
 import time
 import traceback
 import pyautogui
+from pyscreeze import ImageNotFoundException
+import ctypes
+import sys
+
+# Hardcoded coordinates for the JDK installer Next button (from displayMousePosition.py)
+JDK_NEXT_BUTTON_POS = (1046, 687)
 
 
 def load_env_from_file(env_path=".env"):
@@ -105,11 +111,20 @@ def open_chrome_with_medium_article():
 
         # Fallbacks if the new window detection missed
         if not target_window:
-            medium_windows = [w for w in pyautogui.getAllWindows() if "Medium" in (w.title or "")]
+            # Prefer any window whose title hints at the Medium article and avoid Gmail
+            all_windows = pyautogui.getAllWindows()
+            medium_windows = [
+                w for w in all_windows
+                if "medium" in (w.title or "").lower()
+            ]
             if medium_windows:
                 target_window = medium_windows[0]
             else:
                 chrome_windows = pyautogui.getWindowsWithTitle("Chrome")
+                chrome_windows = [
+                    w for w in chrome_windows
+                    if "gmail" not in (w.title or "").lower()
+                ] or chrome_windows
                 target_window = chrome_windows[0] if chrome_windows else pyautogui.getActiveWindow()
 
         if target_window:
@@ -428,7 +443,7 @@ def oracle_sign_in_password_step():
 
 
 def focus_installer_window(timeout_seconds=60):
-    """Locate and focus the JDK installer window by title."""
+    """Locate and focus the JDK installer window by title. Returns the window object or None."""
     print("Looking for JDK installer window...")
     start = time.time()
     target_window = None
@@ -475,11 +490,49 @@ def focus_installer_window(timeout_seconds=60):
             pass
         print(f"OK: Activated installer window: '{target_window.title}'")
         time.sleep(2)  # allow the window to paint
-        return True
+        return target_window
     except Exception as e:
         print(f"ERROR: Unable to activate installer window: {e}")
         traceback.print_exc()
+        return None
+
+
+def click_next_via_setup_test_logic():
+    """Mimic setupWindowClickTest.py: activate installer window and click fixed Next coordinates."""
+    java_windows = pyautogui.getWindowsWithTitle("Java(TM) SE Development Kit")
+    if not java_windows:
+        print("Java installer window not found by exact title. Searching for any Java/JDK windows...")
+        all_windows = pyautogui.getAllWindows()
+        java_windows = [
+            w for w in all_windows
+            if "java" in (w.title or "").lower() or "jdk" in (w.title or "").lower()
+        ]
+
+    if not java_windows:
+        print("WARN: No Java installer windows found. Please ensure the installer is open.")
         return False
+
+    java_window = java_windows[0]
+    print(f"Found installer window: '{java_window.title}'")
+
+    try:
+        print("Activating installer window...")
+        java_window.activate()
+    except Exception:
+        pass
+    time.sleep(2)
+
+    active_window = pyautogui.getActiveWindow()
+    if active_window and active_window.title == java_window.title:
+        print("OK: Installer window active.")
+    else:
+        print("WARN: Installer window may not be fully active.")
+
+    x, y = JDK_NEXT_BUTTON_POS
+    print(f"Clicking Next at coordinates: ({x}, {y}) using tester logic...")
+    pyautogui.moveTo(x, y, duration=0.5)
+    pyautogui.click()
+    return True
 
 
 def wait_for_download_and_open_installer(timeout_seconds=180):
@@ -506,7 +559,10 @@ def wait_for_download_and_open_installer(timeout_seconds=180):
 
     try:
         # Check if the download bubble is ALREADY open (common if download just finished)
-        exe_link = pyautogui.locateOnScreen("oracle_downloaded_jdk11_exe_link.png", confidence=0.7)
+        try:
+            exe_link = pyautogui.locateOnScreen("oracle_downloaded_jdk11_exe_link.png", confidence=0.7)
+        except ImageNotFoundException:
+            exe_link = None
 
         if exe_link:
             print("OK: Download bubble appears to be open already.")
@@ -520,7 +576,10 @@ def wait_for_download_and_open_installer(timeout_seconds=180):
             time.sleep(1.5)  # allow the downloads flyout to open
             
             # Look for the link again
-            exe_link = pyautogui.locateOnScreen("oracle_downloaded_jdk11_exe_link.png", confidence=0.7)
+            try:
+                exe_link = pyautogui.locateOnScreen("oracle_downloaded_jdk11_exe_link.png", confidence=0.7)
+            except ImageNotFoundException:
+                exe_link = None
 
         if exe_link:
             exe_center = pyautogui.center(exe_link)
@@ -541,114 +600,83 @@ def wait_for_download_and_open_installer(timeout_seconds=180):
 def install_jdk():
     """Handle the JDK installation wizard steps."""
     print("Waiting for JDK installer to launch...")
-    
-    # Step 1: Bring installer window to the foreground
-    if not focus_installer_window(timeout_seconds=60):
+
+    # Ensure we are elevated so clicks reach the installer (it runs as admin)
+    if not ctypes.windll.shell32.IsUserAnAdmin():
+        print("WARN: Script not elevated; relaunching as admin is recommended for reliable clicks.")
+
+    installer_win = focus_installer_window(timeout_seconds=60)
+    if not installer_win:
         print("WARN: Installer window not found; cannot continue.")
         return False
 
-    # Step 2: Check for "Already Installed" dialog OR Welcome Screen
     try:
-        # Wait a bit for the installer to actually appear
-        time.sleep(5)
-        
-        print("Looking for installer Welcome screen OR 'Already Installed' dialog...")
-        next_btn = None
-        already_installed_yes = None
-        
-        # Try for up to 60 seconds for the installer to show up
-        for _ in range(30):
-            next_btn = pyautogui.locateOnScreen("JDK_setup_next_icon.png", confidence=0.7)
-            if next_btn:
-                break
-            time.sleep(2)
-            
-        if next_btn:
-            pyautogui.click(pyautogui.center(next_btn))
-            print("OK: Clicked Next on Welcome screen.")
-            time.sleep(2)
-        else:
-            print("WARN: Installer Welcome screen (Next button) not found.")
-            return False
+        time.sleep(5)  # allow installer to paint fully
 
-        # Step 3: Change Install Path
+        # Simple activate-and-click like setupWindowClickTest.py
+        if not click_next_via_setup_test_logic():
+            return False
+        time.sleep(2)
+
         print("Looking for Change... button...")
         change_btn = pyautogui.locateOnScreen("jdk_setup_change_button.png", confidence=0.7)
-        if change_btn:
-            pyautogui.click(pyautogui.center(change_btn))
-            print("OK: Clicked Change button.")
-            time.sleep(2)
-            
-            # Wait for the folder change screen/textbox
-            print("Looking for folder path textbox...")
-            textbox = None
-            for _ in range(10):
-                textbox = pyautogui.locateOnScreen("jdk_setup_change_folder_name_textbox.png", confidence=0.7)
-                if textbox:
-                    break
-                time.sleep(1)
-                
-            if textbox:
-                pyautogui.click(pyautogui.center(textbox))
-                print("OK: Focused folder path textbox.")
-                
-                # Select all and delete
-                pyautogui.hotkey("ctrl", "a")
-                time.sleep(0.5)
-                pyautogui.press("backspace")
-                time.sleep(0.5)
-                
-                # Type new path
-                new_path = r"C:\Java\jdk-11\\"
-                pyautogui.write(new_path, interval=0.05)
-                print(f"OK: Typed new path: {new_path}")
-                time.sleep(1)
-                
-                # Click OK
-                ok_btn = pyautogui.locateOnScreen("Ok_button.png", confidence=0.7)
-                if ok_btn:
-                    pyautogui.click(pyautogui.center(ok_btn))
-                    print("OK: Clicked OK button to confirm path.")
-                    time.sleep(2)
-                else:
-                    print("WARN: OK button not found.")
-                    return False
-            else:
-                print("WARN: Folder path textbox not found.")
-                return False
-        else:
+        if not change_btn:
             print("WARN: Change button not found.")
             return False
+        pyautogui.click(pyautogui.center(change_btn))
+        print("OK: Clicked Change button.")
+        time.sleep(2)
 
-        # Step 4: Next (to start install)
+        print("Looking for folder path textbox...")
+        textbox = None
+        for _ in range(10):
+            textbox = pyautogui.locateOnScreen("jdk_setup_change_folder_name_textbox.png", confidence=0.7)
+            if textbox:
+                break
+            time.sleep(1)
+        if not textbox:
+            print("WARN: Folder path textbox not found.")
+            return False
+
+        pyautogui.click(pyautogui.center(textbox))
+        print("OK: Focused folder path textbox.")
+        pyautogui.hotkey("ctrl", "a")
+        time.sleep(0.5)
+        pyautogui.press("backspace")
+        time.sleep(0.5)
+        new_path = r"C:\\Java\\jdk-11\\"
+        pyautogui.write(new_path, interval=0.05)
+        print(f"OK: Typed new path: {new_path}")
+        time.sleep(1)
+
+        ok_btn = pyautogui.locateOnScreen("Ok_button.png", confidence=0.7)
+        if not ok_btn:
+            print("WARN: OK button not found.")
+            return False
+        pyautogui.click(pyautogui.center(ok_btn))
+        print("OK: Clicked OK button to confirm path.")
+        time.sleep(2)
+
         print("Looking for Next button to start installation...")
-        # Reuse the next button image
         next_btn_2 = pyautogui.locateOnScreen("JDK_setup_next_icon.png", confidence=0.7)
-        if next_btn_2:
-            pyautogui.click(pyautogui.center(next_btn_2))
-            print("OK: Clicked Next to start installation.")
-        else:
+        if not next_btn_2:
             print("WARN: Second Next button not found.")
             return False
-            
-        # Step 5: Wait for Close button
+        pyautogui.click(pyautogui.center(next_btn_2))
+        print("OK: Clicked Next to start installation.")
+
         print("Waiting for installation to complete (looking for Close button)...")
-        close_btn = None
-        # Wait up to 5 minutes for install to finish
         start_wait = time.time()
         while time.time() - start_wait < 300:
             close_btn = pyautogui.locateOnScreen("Close_button.png", confidence=0.7)
             if close_btn:
-                break
+                pyautogui.click(pyautogui.center(close_btn))
+                print("OK: Installation complete! Clicked Close.")
+                return True
             time.sleep(2)
-            
-        if close_btn:
-            pyautogui.click(pyautogui.center(close_btn))
-            print("OK: Installation complete! Clicked Close.")
-            return True
-        else:
-            print("WARN: Close button not found (installation timed out?).")
-            return False
+
+        print("WARN: Close button not found (installation timed out?).")
+        return False
 
     except Exception as e:
         print(f"ERROR during JDK installation: {repr(e)}")
